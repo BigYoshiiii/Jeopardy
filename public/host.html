@@ -16,7 +16,7 @@
     <div class="row">
       <span class="pill" id="roomPill">Room: —</span>
       <button class="primary" id="btnCreate">Room erstellen</button>
-      <button class="ghost" id="btnCopy">Link kopieren</button>
+      <button class="ghost" id="btnCopy">Viewer-Link kopieren</button>
     </div>
   </div>
 </header>
@@ -30,6 +30,8 @@
           <span class="pill muted" id="viewerPill">Viewer: 0</span>
         </div>
         <div class="row">
+          <button class="ghost" id="btnModeEdit">Edit</button>
+          <button class="ghost" id="btnModePlay">Play</button>
           <button class="ghost" id="btnResize">Größe</button>
           <button class="ghost" id="btnResetUsed">Used reset</button>
         </div>
@@ -37,18 +39,17 @@
       <div class="bd">
         <div id="board" class="board"></div>
         <div class="row" style="margin-top:12px">
-          <span class="small muted">Host klickt Kachel: edit (oder öffnen im Spiel). Viewer sehen live alles.</span>
+          <span class="small muted">
+            Edit: Kategorien/Fragen anklicken und rechts bearbeiten. Play: Kachel öffnet Frage-Modal.
+          </span>
         </div>
       </div>
     </section>
 
     <section class="card">
       <div class="hd">
-        <span class="pill">Editor / Scores</span>
-        <div class="row">
-          <button class="ghost" id="btnModeEdit">Edit</button>
-          <button class="ghost" id="btnModePlay">Play</button>
-        </div>
+        <span class="pill" id="sideTitle">Editor</span>
+        <span class="pill muted" id="modePill">Mode: EDIT</span>
       </div>
       <div class="bd" id="side"></div>
     </section>
@@ -63,7 +64,8 @@
         <span class="pill" id="mVal">—</span>
       </div>
       <div class="row">
-        <button class="ghost" id="btnReveal">Antwort</button>
+        <button class="ghost" id="btnReveal">Antwort zeigen</button>
+        <button class="primary" id="btnUsed">Als benutzt</button>
         <button class="ghost" id="btnClose">Schließen</button>
       </div>
     </div>
@@ -74,12 +76,9 @@
         <div style="font-weight:950;font-size:18px" id="mA">—</div>
       </div>
       <div class="row" style="margin-top:14px;justify-content:space-between">
+        <div class="row" id="scoreControls"></div>
         <div class="row">
-          <button class="good" id="btnRight">Richtig (+)</button>
-          <button class="bad" id="btnWrong">Falsch (-)</button>
-        </div>
-        <div class="row">
-          <button class="primary" id="btnUsed">Als benutzt</button>
+          <span class="small muted">Punkte gehen aufs ausgewählte Team.</span>
         </div>
       </div>
     </div>
