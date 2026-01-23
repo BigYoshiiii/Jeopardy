@@ -11,7 +11,6 @@ const __dirname = path.dirname(__filename);
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
-
 app.get("/", (req, res) => res.sendFile(path.join(__dirname, "public/index.html")));
 
 const server = http.createServer(app);
@@ -19,18 +18,15 @@ const io = new Server(server, {
   cors: { origin: true, methods: ["GET", "POST"] }
 });
 
-/** -----------------------
- *  Rooms / Sessions Model
- *  -----------------------
- *  - clientId = persistent per browser (localStorage)
- *  - rooms live in memory (MVP), with TTL
+/**
+ * Memory rooms (MVP) + TTL.
+ * Wenn du "Gartic-stabil über Tage" willst -> Redis/Upstash als nächster Step.
  */
-
 const ROOM_TTL_MS = 6 * 60 * 60 * 1000; // 6h
 const ROOM_CLEANUP_EVERY_MS = 60 * 1000;
 
-const rooms = new Map(); // code -> room
-const clients = new Map(); // socket.id -> {clientId, roomCode}
+const rooms = new Map();  // code -> room
+const clients = new Map(); // socket.id -> { clientId, roomCode }
 
 function makeCode(len = 5) {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -74,9 +70,7 @@ function defaultState() {
   };
 }
 
-function getRoom(code) {
-  return rooms.get(code);
-}
+function getRoom(code) { return rooms.get(code); }
 
 function ensureRoom(code) {
   const r = rooms.get(code);
@@ -90,7 +84,6 @@ function isHost(room, clientId) {
 }
 
 function publicRoomSnapshot(room) {
-  // what clients get
   return {
     code: room.code,
     phase: room.state.phase,
@@ -114,16 +107,13 @@ function broadcastRoom(code) {
 }
 
 function assertJoinAllowed(room, role, password, clientId) {
-  // Host reconnect: always allowed
-  if (isHost(room, clientId)) return { ok: true };
+  if (isHost(room, clientId)) return { ok: true, role: "player" };
 
-  // Otherwise check password if set
   if (room.passwordHash) {
     const pwHash = hashPassword((password ?? "").trim());
     if (!pwHash || pwHash !== room.passwordHash) return { ok: false, error: "wrong_password" };
   }
 
-  // Role sanity
   if (!["player", "spectator"].includes(role)) role = "player";
   return { ok: true, role };
 }
@@ -147,15 +137,12 @@ function upsertPlayer(room, { clientId, name, role }) {
   return p;
 }
 
-// Cleanup old rooms
 setInterval(() => {
   const t = now();
   for (const [code, room] of rooms.entries()) {
     if (t - room.lastActivityAt > ROOM_TTL_MS) rooms.delete(code);
   }
 }, ROOM_CLEANUP_EVERY_MS);
-
-// ---------------- Socket.io ----------------
 
 io.on("connection", (socket) => {
   socket.on("room:create", ({ clientId, name, password } = {}, cb) => {
@@ -175,13 +162,12 @@ io.on("connection", (socket) => {
 
       rooms.set(code, room);
 
-      // creator becomes host player
       upsertPlayer(room, { clientId, name: name || "Host", role: "player" });
 
       socket.join(code);
       clients.set(socket.id, { clientId, roomCode: code });
 
-      cb?.({ ok: true, code, snapshot: publicRoomSnapshot(room) });
+      cb?.({ ok: true, code, snapshot: publicRoomSnapshot(room), isHost: true });
       broadcastRoom(code);
     } catch {
       cb?.({ ok: false, error: "create_failed" });
@@ -199,10 +185,9 @@ io.on("connection", (socket) => {
     socket.join(code);
     clients.set(socket.id, { clientId, roomCode: code });
 
-    // If host joins and hostClientId is empty (edge), restore
     if (!room.hostClientId) room.hostClientId = clientId;
 
-    upsertPlayer(room, { clientId, name: name || "Player", role: allow.role || role || "player" });
+    upsertPlayer(room, { clientId, name: name || "Player", role: allow.role });
 
     cb?.({ ok: true, snapshot: publicRoomSnapshot(room), isHost: isHost(room, clientId) });
     broadcastRoom(code);
@@ -214,7 +199,6 @@ io.on("connection", (socket) => {
     const room = getRoom(link.roomCode);
     if (room) {
       socket.leave(link.roomCode);
-      // keep player for reconnect; mark lastSeen
       const p = room.players.get(link.clientId);
       if (p) p.lastSeenAt = now();
       broadcastRoom(link.roomCode);
@@ -223,7 +207,6 @@ io.on("connection", (socket) => {
     cb?.({ ok: true });
   });
 
-  // Lobby: ready toggle
   socket.on("player:ready", ({ ready } = {}, cb) => {
     const link = clients.get(socket.id);
     if (!link) return cb?.({ ok: false, error: "not_in_room" });
@@ -231,13 +214,13 @@ io.on("connection", (socket) => {
     if (!room) return cb?.({ ok: false, error: "room_not_found" });
     const p = room.players.get(link.clientId);
     if (!p) return cb?.({ ok: false, error: "player_not_found" });
+
     p.ready = !!ready;
     room.lastActivityAt = now();
     broadcastRoom(room.code);
     cb?.({ ok: true });
   });
 
-  // Host: start game
   socket.on("host:start", (_, cb) => {
     const link = clients.get(socket.id);
     if (!link) return cb?.({ ok: false, error: "not_in_room" });
@@ -252,7 +235,6 @@ io.on("connection", (socket) => {
     cb?.({ ok: true });
   });
 
-  // Host: set room password (optional)
   socket.on("host:setPassword", ({ password } = {}, cb) => {
     const link = clients.get(socket.id);
     if (!link) return cb?.({ ok: false, error: "not_in_room" });
@@ -267,7 +249,6 @@ io.on("connection", (socket) => {
     cb?.({ ok: true });
   });
 
-  // Host: load quiz (board)
   socket.on("host:loadQuiz", ({ quiz } = {}, cb) => {
     const link = clients.get(socket.id);
     if (!link) return cb?.({ ok: false, error: "not_in_room" });
@@ -277,7 +258,6 @@ io.on("connection", (socket) => {
 
     if (!quiz?.board?.cols || !quiz?.board?.rows) return cb?.({ ok: false, error: "bad_quiz" });
 
-    // reset used/current/scores (scores keep teams names)
     room.state.quiz = { version: 1, board: quiz.board };
     room.state.current = { open: false, col: null, row: null, showAnswer: false };
     room.state.scores = room.state.scores.map(t => ({ ...t, score: 0 }));
@@ -286,7 +266,6 @@ io.on("connection", (socket) => {
     cb?.({ ok: true });
   });
 
-  // Host: game actions (open/reveal/close/used/score)
   socket.on("host:action", ({ action } = {}, cb) => {
     const link = clients.get(socket.id);
     if (!link) return cb?.({ ok: false, error: "not_in_room" });
@@ -298,35 +277,49 @@ io.on("connection", (socket) => {
     const b = s.quiz.board;
 
     try {
+      // --- PLAY FLOW ---
       if (action?.type === "open") {
         const { col, row } = action;
         if (s.phase !== "game") throw new Error("not_in_game");
         if (!b.clues?.[col]?.[row]) throw new Error("bad_cell");
         if (b.clues[col][row].used) throw new Error("used");
         s.current = { open: true, col, row, showAnswer: false };
+
       } else if (action?.type === "close") {
         s.current = { open: false, col: null, row: null, showAnswer: false };
+
       } else if (action?.type === "reveal") {
         if (!s.current.open) throw new Error("no_current");
         s.current.showAnswer = true;
+
       } else if (action?.type === "markUsed") {
         const { col, row, used } = action;
         if (!b.clues?.[col]?.[row]) throw new Error("bad_cell");
         b.clues[col][row].used = !!used;
+
+      } else if (action?.type === "resetUsed") {
+        for (let c = 0; c < b.cols; c++) {
+          for (let r = 0; r < b.rows; r++) b.clues[c][r].used = false;
+        }
+
       } else if (action?.type === "scoreDelta") {
         const { teamId, delta } = action;
         const t = s.scores.find(x => x.id === teamId);
         if (t) t.score += Number(delta) || 0;
+
       } else if (action?.type === "renameTeam") {
         const { teamId, name } = action;
         const t = s.scores.find(x => x.id === teamId);
         if (t) t.name = String(name ?? "").trim().slice(0, 20) || t.name;
+
+      // --- EDITOR ACTIONS ---
       } else if (action?.type === "editCategory") {
         const { col, name } = action;
         if (typeof col !== "number") throw new Error("bad_col");
-        if (!b.categories?.[col]) throw new Error("bad_col");
+        if (!b.categories?.[col] && b.categories?.[col] !== "") throw new Error("bad_col");
         const clean = String(name ?? "").trim().slice(0, 40);
-        b.categories[col] = clean || b.categories[col];
+        if (clean) b.categories[col] = clean;
+
       } else if (action?.type === "editClue") {
         const { col, row, q, a, value } = action;
         if (typeof col !== "number" || typeof row !== "number") throw new Error("bad_cell");
@@ -336,13 +329,11 @@ io.on("connection", (socket) => {
         const cleanA = String(a ?? "").trim().slice(0, 600);
         const v = Number(value);
         if (!Number.isFinite(v) || v < 0 || v > 100000) throw new Error("bad_value");
+
         b.clues[col][row].q = cleanQ;
         b.clues[col][row].a = cleanA;
         b.clues[col][row].value = v;
-      } else if (action?.type === "resetUsed") {
-        for (let c = 0; c < b.cols; c++) {
-          for (let r = 0; r < b.rows; r++) b.clues[c][r].used = false;
-        }
+
       } else {
         throw new Error("unknown_action");
       }
@@ -371,4 +362,3 @@ io.on("connection", (socket) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log(`Running on :${PORT}`));
-
