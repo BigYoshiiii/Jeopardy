@@ -1,31 +1,15 @@
 <!doctype html>
 <html lang="de">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>Jeopardy Online</title>
-  <link rel="stylesheet" href="/index.css">
+  <link rel="stylesheet" href="/app.css"/>
 </head>
 <body>
-  <div class="page">
-    <div class="card">
-      <div class="badge">ONLINE · LIVE</div>
-      <h1>Jeopardy Online</h1>
-      <p>
-        Host erstellt das Spiel.<br>
-        Zuschauer sehen alles live.<br>
-        Keine Installation. Kein Login.
-      </p>
+  <div id="app"></div>
 
-      <div class="actions">
-        <a class="btn primary" href="/host.html">🎤 Host starten</a>
-        <a class="btn secondary" href="/view.html">👀 Als Zuschauer beitreten</a>
-      </div>
-
-      <div class="footer">
-        Multiplayer · WebSockets · Realtime
-      </div>
-    </div>
-  </div>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/app.js"></script>
 </body>
 </html>
