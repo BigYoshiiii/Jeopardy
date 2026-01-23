@@ -1,10 +1,14 @@
-if (client.isHost && client.editMode === "edit") {
-  t.style.cursor = "pointer";
-  t.title = "Kategorie bearbeiten";
-  t.addEventListener("click", () => {
-    client.selected = { type: "cat", col: c };
-    renderRoom();
-  });
-} else {
-  t.style.cursor = "default";
+{
+  "name": "jeopardy-online",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5"
+  }
 }
