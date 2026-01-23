@@ -321,6 +321,24 @@ io.on("connection", (socket) => {
         const { teamId, name } = action;
         const t = s.scores.find(x => x.id === teamId);
         if (t) t.name = String(name ?? "").trim().slice(0, 20) || t.name;
+      } else if (action?.type === "editCategory") {
+        const { col, name } = action;
+        if (typeof col !== "number") throw new Error("bad_col");
+        if (!b.categories?.[col]) throw new Error("bad_col");
+        const clean = String(name ?? "").trim().slice(0, 40);
+        b.categories[col] = clean || b.categories[col];
+      } else if (action?.type === "editClue") {
+        const { col, row, q, a, value } = action;
+        if (typeof col !== "number" || typeof row !== "number") throw new Error("bad_cell");
+        if (!b.clues?.[col]?.[row]) throw new Error("bad_cell");
+
+        const cleanQ = String(q ?? "").trim().slice(0, 600);
+        const cleanA = String(a ?? "").trim().slice(0, 600);
+        const v = Number(value);
+        if (!Number.isFinite(v) || v < 0 || v > 100000) throw new Error("bad_value");
+        b.clues[col][row].q = cleanQ;
+        b.clues[col][row].a = cleanA;
+        b.clues[col][row].value = v;
       } else if (action?.type === "resetUsed") {
         for (let c = 0; c < b.cols; c++) {
           for (let r = 0; r < b.rows; r++) b.clues[c][r].used = false;
@@ -353,3 +371,4 @@ io.on("connection", (socket) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log(`Running on :${PORT}`));
+
