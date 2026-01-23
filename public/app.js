@@ -9,7 +9,6 @@ const LS = {
 
 function uuid() {
   if (crypto?.randomUUID) return crypto.randomUUID();
-  // fallback (rare)
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
     const r = (Math.random() * 16) | 0;
     const v = c === "x" ? r : (r & 0x3) | 0x8;
@@ -26,16 +25,12 @@ function getClientId() {
 function getName() { return localStorage.getItem(LS.name) || ""; }
 function setName(n) { localStorage.setItem(LS.name, n); }
 
-function qs() { return new URLSearchParams(location.search); }
-
 function setHash(path) { location.hash = path; }
 
 function parseRoute() {
-  // #/  | #/join | #/room/ABCDE
   const h = (location.hash || "#/").slice(1);
   const parts = h.split("/").filter(Boolean);
   if (parts.length === 0) return { name: "home" };
-  if (parts[0] === "join") return { name: "join" };
   if (parts[0] === "room" && parts[1]) return { name: "room", code: parts[1].toUpperCase() };
   return { name: "home" };
 }
@@ -53,9 +48,7 @@ function quizLibGet() {
   try { return JSON.parse(localStorage.getItem(LS.quizLib) || "[]"); }
   catch { return []; }
 }
-function quizLibSet(list) {
-  localStorage.setItem(LS.quizLib, JSON.stringify(list));
-}
+function quizLibSet(list) { localStorage.setItem(LS.quizLib, JSON.stringify(list)); }
 
 const app = document.getElementById("app");
 
@@ -65,8 +58,11 @@ const client = {
   roomCode: null,
   snapshot: null,
   isHost: false,
-  role: "player", // player | spectator
-  joinPassword: ""
+  role: "player",
+  joinPassword: "",
+  editMode: "play", // host: play | edit
+  selected: null,   // host: {type:"cat", col} | {type:"clue", col, row}
+  activeTeamId: null
 };
 
 // ---------- UI Shell ----------
@@ -169,27 +165,23 @@ function pageHome() {
           </div>
 
           <div style="margin-top:12px" class="small">
-            Tipp: Du kannst einfach den Join-Link teilen: <span class="pill">#/room/ABCDE</span>
+            Join-Link: <span class="pill">#/room/ABCDE</span>
           </div>
         </div>
       </section>
 
       <section class="card">
-        <div class="hd"><h2>Local Quiz Library</h2></div>
+        <div class="hd"><h2>Quiz Library (local)</h2></div>
         <div class="bd" id="libBox"></div>
       </section>
     </div>
   `);
 
-  // library
   const lib = quizLibGet();
   const libBox = document.getElementById("libBox");
   libBox.innerHTML = `
+    <div style="margin-bottom:10px" class="small">Speichert im Browser. Nicht global.</div>
     <div class="row">
-      <input id="libName" placeholder="Name fürs Quiz (z.B. 'Marvel')" />
-      <button id="saveCurrent">Save current (host)</button>
-    </div>
-    <div style="margin-top:10px" class="row">
       <label class="pill" style="cursor:pointer">
         Import JSON
         <input id="importQuiz" type="file" accept="application/json" style="display:none">
@@ -205,16 +197,14 @@ function pageHome() {
               <div class="small">${esc(x.savedAt)}</div>
             </div>
             <div class="row">
-              <button data-load="${i}">Load (host)</button>
-              <button class="bad" data-del="${i}">Delete</button>
+              <button data-del="${i}" class="bad">Delete</button>
             </div>
           </div>
         </div>
-      `).join("") : `<div class="small">Noch nix gespeichert. Import oder später im Room speichern.</div>`}
+      `).join("") : `<div class="small">Noch nix gespeichert. Import erstmal.</div>`}
     </div>
   `;
 
-  // wire inputs
   document.getElementById("createBtn").addEventListener("click", () => {
     const name = (document.getElementById("name").value || "").trim();
     const role = document.getElementById("role").value;
@@ -228,6 +218,8 @@ function pageHome() {
       client.isHost = true;
       client.snapshot = res.snapshot;
       client.roomCode = res.code;
+      client.editMode = "play";
+      client.selected = null;
       localStorage.setItem(LS.lastRoom, res.code);
       setHash(`/room/${res.code}`);
     });
@@ -245,7 +237,6 @@ function pageHome() {
     setHash(`/room/${code}`);
   });
 
-  // library actions
   document.querySelectorAll("[data-del]").forEach(btn => {
     btn.addEventListener("click", () => {
       const i = Number(btn.getAttribute("data-del"));
@@ -256,29 +247,9 @@ function pageHome() {
     });
   });
 
-  document.querySelectorAll("[data-load]").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const i = Number(btn.getAttribute("data-load"));
-      const item = quizLibGet()[i];
-      if (!item) return;
-      if (!client.isHost || !client.roomCode) return alert("Load geht nur als Host im Room.");
-      socket.emit("host:loadQuiz", { quiz: item.quiz }, (res) => {
-        if (!res?.ok) alert("Load failed: " + res.error);
-      });
-    });
-  });
-
   document.getElementById("exportBlank").addEventListener("click", () => {
-    const quiz = { version: 1, board: { cols: 5, rows: 5, categories: ["A","B","C","D","E"], clues: [] } };
-    // create empty clues
-    quiz.board.clues = Array.from({length:5}, (_,c)=>Array.from({length:5},(_,r)=>({
-      q:`Frage ${c+1}.${r+1}`, a:`Antwort ${c+1}.${r+1}`, value:(r+1)*100, used:false
-    })));
-    const blob = new Blob([JSON.stringify(quiz, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = "jeopardy_quiz_blank.json"; a.click();
-    URL.revokeObjectURL(url);
+    const quiz = makeBlankQuiz(5,5);
+    downloadJson(quiz, "jeopardy_quiz_blank.json");
   });
 
   document.getElementById("importQuiz").addEventListener("change", (e) => {
@@ -302,21 +273,6 @@ function pageHome() {
     r.readAsText(f);
     e.target.value = "";
   });
-
-  document.getElementById("saveCurrent")?.addEventListener("click", () => {
-    if (!client.isHost || !client.snapshot?.state?.quiz) return alert("Nur als Host im Room sinnvoll.");
-    const name = prompt("Name fürs Quiz:", "My Quiz");
-    if (!name) return;
-    const quiz = client.snapshot.state.quiz;
-    const list = quizLibGet();
-    list.unshift({ name, savedAt: new Date().toISOString(), quiz });
-    quizLibSet(list.slice(0,50));
-    pageHome();
-  });
-}
-
-function pageJoin() {
-  setHash("/"); // we keep it simple; join is on home
 }
 
 function pageRoom(code) {
@@ -359,11 +315,12 @@ function pageRoom(code) {
       client.roomCode = null;
       client.snapshot = null;
       client.isHost = false;
+      client.selected = null;
+      client.editMode = "play";
       setHash("/");
     });
   });
 
-  // join the room (or rejoin)
   const name = client.name || getName();
   if (!name) {
     alert("Setz erst deinen Namen.");
@@ -383,28 +340,36 @@ function pageRoom(code) {
         const pw = prompt("Room Passwort:");
         if (!pw) return setHash("/");
         client.joinPassword = pw;
-        return pageRoom(code); // retry
+        return pageRoom(code);
       }
       alert("Join failed: " + res.error);
       return setHash("/");
     }
     client.snapshot = res.snapshot;
     client.isHost = !!res.isHost;
+    client.selected = null;
     localStorage.setItem(LS.lastRoom, code);
     renderRoom();
   });
+
+  function ensureActiveTeam(s) {
+    if (!s?.scores?.length) return;
+    if (!client.activeTeamId) client.activeTeamId = s.scores[0].id;
+    if (!s.scores.find(t => t.id === client.activeTeamId)) client.activeTeamId = s.scores[0].id;
+  }
 
   function renderRoom() {
     const snap = client.snapshot;
     if (!snap) return;
 
     document.getElementById("phasePill").textContent = `phase: ${snap.phase}`;
-    document.getElementById("youPill").textContent = client.isHost ? "Du bist Host" : (client.role === "spectator" ? "Du bist Spectator" : "Du bist Player");
+    document.getElementById("youPill").textContent =
+      client.isHost ? "Du bist Host" : (client.role === "spectator" ? "Du bist Spectator" : "Du bist Player");
 
     const left = document.getElementById("left");
     const right = document.getElementById("right");
 
-    // Lobby view
+    // LOBBY
     if (snap.phase === "lobby") {
       left.innerHTML = `
         <div class="pill">Lobby</div>
@@ -416,9 +381,7 @@ function pageRoom(code) {
                   <div style="font-weight:950">${esc(p.name)} ${p.isHost ? '<span class="pill">HOST</span>' : ""}</div>
                   <div class="small">${esc(p.role)} · ${p.ready ? "ready" : "not ready"}</div>
                 </div>
-                <div class="row">
-                  ${p.ready ? `<span class="pill">READY</span>` : `<span class="pill">…</span>`}
-                </div>
+                <div>${p.ready ? `<span class="pill">READY</span>` : `<span class="pill">…</span>`}</div>
               </div>
             </div>
           `).join("")}
@@ -447,10 +410,9 @@ function pageRoom(code) {
               <input id="loadQuizFile" type="file" accept="application/json" style="display:none">
             </label>
             <button id="exportQuiz">Export Current Quiz</button>
+            <button id="saveToLib">Save to Library</button>
           </div>
-        ` : `
-          <div class="small" style="margin-top:14px">Warte bis Host startet.</div>
-        `}
+        ` : `<div class="small" style="margin-top:14px">Warte bis Host startet.</div>`}
       `;
 
       document.getElementById("readyBtn").addEventListener("click", () => {
@@ -459,20 +421,26 @@ function pageRoom(code) {
 
       if (client.isHost) {
         document.getElementById("startBtn")?.addEventListener("click", () => socket.emit("host:start", null, (r)=>{ if(!r?.ok) alert(r.error); }));
+
         document.getElementById("setPw")?.addEventListener("click", () => {
           const pw = (document.getElementById("newPw").value || "").trim();
-          socket.emit("host:setPassword", { password: pw }, (r)=>{ if(!r?.ok) alert(r.error); else alert(pw ? "Passwort gesetzt." : "Passwort entfernt."); });
+          socket.emit("host:setPassword", { password: pw }, (r)=> {
+            if (!r?.ok) alert(r.error);
+            else alert(pw ? "Passwort gesetzt." : "Passwort entfernt.");
+          });
         });
 
         document.getElementById("exportQuiz")?.addEventListener("click", () => {
-          const quiz = snap.state.quiz;
-          const blob = new Blob([JSON.stringify(quiz, null, 2)], { type: "application/json" });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = `jeopardy_quiz_${snap.code}.json`;
-          a.click();
-          URL.revokeObjectURL(url);
+          downloadJson(snap.state.quiz, `jeopardy_quiz_${snap.code}.json`);
+        });
+
+        document.getElementById("saveToLib")?.addEventListener("click", () => {
+          const name = prompt("Name fürs Quiz:", "My Quiz");
+          if (!name) return;
+          const list = quizLibGet();
+          list.unshift({ name, savedAt: new Date().toISOString(), quiz: snap.state.quiz });
+          quizLibSet(list.slice(0,50));
+          alert("Gespeichert (local).");
         });
 
         document.getElementById("loadQuizFile")?.addEventListener("change", (e) => {
@@ -491,18 +459,20 @@ function pageRoom(code) {
           e.target.value = "";
         });
       }
-
       return;
     }
 
-    // Game view
+    // GAME
     const s = snap.state;
+    ensureActiveTeam(s);
     const b = s.quiz.board;
 
     left.innerHTML = `
       <div class="pill">Board</div>
       <div style="margin-top:10px" id="board" class="board"></div>
-      <div style="margin-top:10px" class="small">Play: Host klickt Felder. Alle sehen’s live.</div>
+      <div style="margin-top:10px" class="small">
+        ${client.isHost ? `Mode: <span class="pill">${client.editMode.toUpperCase()}</span>` : `Live View`}
+      </div>
     `;
 
     const boardEl = document.getElementById("board");
@@ -514,9 +484,20 @@ function pageRoom(code) {
       const t = document.createElement("div");
       t.className = "tile cat";
       t.textContent = b.categories[c] ?? `Kategorie ${c+1}`;
-      t.style.cursor = "default";
+
+      if (client.isHost && client.editMode === "edit") {
+        t.title = "Kategorie bearbeiten";
+        t.addEventListener("click", () => {
+          client.selected = { type: "cat", col: c };
+          renderRoom();
+        });
+      } else {
+        t.style.cursor = "default";
+      }
+
       boardEl.appendChild(t);
     }
+
     // cells
     for (let r=0;r<b.rows;r++){
       for (let c=0;c<b.cols;c++){
@@ -527,17 +508,22 @@ function pageRoom(code) {
 
         if (client.isHost) {
           t.addEventListener("click", () => {
+            if (client.editMode === "edit") {
+              client.selected = { type:"clue", col:c, row:r };
+              renderRoom();
+              return;
+            }
             if (cl.used) return;
             hostAction({ type:"open", col:c, row:r });
           });
         } else {
           t.style.cursor = "default";
         }
+
         boardEl.appendChild(t);
       }
     }
 
-    // Scores + host controls
     right.innerHTML = `
       <div class="pill">Scores</div>
       <div style="margin-top:10px" class="list">
@@ -563,13 +549,18 @@ function pageRoom(code) {
       ${client.isHost ? `
         <div style="margin-top:14px" class="pill">Host Controls</div>
         <div style="margin-top:10px" class="row">
+          <button id="modePlay" class="${client.editMode==="play" ? "primary" : ""}">PLAY</button>
+          <button id="modeEdit" class="${client.editMode==="edit" ? "primary" : ""}">EDIT</button>
           <button id="resetUsed">Reset Used</button>
-          <button id="backLobby" class="bad">Back to Lobby</button>
+        </div>
+
+        <div style="margin-top:12px" class="card" style="box-shadow:none;background:rgba(255,255,255,.03)">
+          <div class="bd" id="editorBox"></div>
         </div>
       ` : `<div style="margin-top:14px" class="small">Du bist ${client.role}. Host steuert.</div>`}
     `;
 
-    // host score buttons
+    // host wiring (scores)
     if (client.isHost) {
       document.querySelectorAll("[data-delta]").forEach(btn => {
         btn.addEventListener("click", () => {
@@ -578,6 +569,7 @@ function pageRoom(code) {
           hostAction({ type:"scoreDelta", teamId, delta });
         });
       });
+
       document.querySelectorAll("[data-rename]").forEach(btn => {
         btn.addEventListener("click", () => {
           const teamId = btn.getAttribute("data-rename");
@@ -586,13 +578,90 @@ function pageRoom(code) {
           hostAction({ type:"renameTeam", teamId, name });
         });
       });
+
       document.getElementById("resetUsed")?.addEventListener("click", () => hostAction({ type:"resetUsed" }));
-      document.getElementById("backLobby")?.addEventListener("click", () => {
-        alert("Noch nicht eingebaut. Wenn du willst, baue ich 'Back to Lobby' sauber rein.");
+
+      document.getElementById("modePlay")?.addEventListener("click", () => {
+        client.editMode = "play";
+        client.selected = null;
+        renderRoom();
       });
+      document.getElementById("modeEdit")?.addEventListener("click", () => {
+        client.editMode = "edit";
+        renderRoom();
+      });
+
+      // EDITOR PANEL
+      const box = document.getElementById("editorBox");
+      if (box) {
+        if (client.editMode !== "edit") {
+          box.innerHTML = `<div class="small">EDIT ist aus. Stell auf EDIT um, um Fragen zu bearbeiten.</div>`;
+        } else if (!client.selected) {
+          box.innerHTML = `<div class="small">Klick links eine Kategorie oder ein Feld. Dann bearbeiten.</div>`;
+        } else {
+          if (client.selected.type === "cat") {
+            const col = client.selected.col;
+            const cur = b.categories[col] ?? "";
+            box.innerHTML = `
+              <div class="pill">Kategorie</div>
+              <div style="margin-top:10px" class="small">Spalte ${col + 1}</div>
+              <div style="margin-top:10px">
+                <div class="small">Name</div>
+                <input id="catName" value="${esc(cur)}" />
+              </div>
+              <div style="margin-top:10px" class="row">
+                <button class="primary" id="saveCat">Speichern</button>
+              </div>
+            `;
+            document.getElementById("saveCat")?.addEventListener("click", () => {
+              const name = (document.getElementById("catName").value || "").trim();
+              hostAction({ type: "editCategory", col, name });
+            });
+          }
+
+          if (client.selected.type === "clue") {
+            const { col, row } = client.selected;
+            const cl = b.clues[col][row];
+            box.innerHTML = `
+              <div class="pill">Frage</div>
+              <div style="margin-top:10px" class="small">${esc(b.categories[col] || "Kategorie")} · Reihe ${row + 1}</div>
+
+              <div style="margin-top:10px">
+                <div class="small">Frage</div>
+                <textarea id="qBox">${esc(cl.q ?? "")}</textarea>
+              </div>
+
+              <div style="margin-top:10px">
+                <div class="small">Antwort</div>
+                <textarea id="aBox">${esc(cl.a ?? "")}</textarea>
+              </div>
+
+              <div style="margin-top:10px">
+                <div class="small">Punkte</div>
+                <input id="vBox" type="number" value="${Number(cl.value ?? 0)}" />
+              </div>
+
+              <div style="margin-top:10px" class="row">
+                <button class="primary" id="saveClue">Speichern</button>
+                <button id="toggleUsed">${cl.used ? "Un-used" : "Used"}</button>
+              </div>
+            `;
+
+            document.getElementById("saveClue")?.addEventListener("click", () => {
+              const q = (document.getElementById("qBox").value || "").trim();
+              const a = (document.getElementById("aBox").value || "").trim();
+              const value = Number(document.getElementById("vBox").value) || 0;
+              hostAction({ type: "editClue", col, row, q, a, value });
+            });
+
+            document.getElementById("toggleUsed")?.addEventListener("click", () => {
+              hostAction({ type: "markUsed", col, row, used: !cl.used });
+            });
+          }
+        }
+      }
     }
 
-    // modal state
     renderModalState();
   }
 
@@ -622,15 +691,16 @@ function pageRoom(code) {
     if (s.current.showAnswer) mABox.classList.add("open");
     else mABox.classList.remove("open");
 
-    // host-only scoring in modal
     if (client.isHost) {
+      if (!client.activeTeamId) client.activeTeamId = s.scores[0]?.id || null;
       mScore.innerHTML = `
         <select id="teamPick" style="max-width:220px">
-          ${s.scores.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join("")}
+          ${s.scores.map(t => `<option value="${t.id}" ${t.id===client.activeTeamId?"selected":""}>${esc(t.name)}</option>`).join("")}
         </select>
         <button class="good" id="addPts">Richtig +</button>
         <button class="bad" id="subPts">Falsch -</button>
       `;
+      document.getElementById("teamPick").onchange = (e) => client.activeTeamId = e.target.value;
       document.getElementById("addPts").onclick = () => {
         const teamId = document.getElementById("teamPick").value;
         hostAction({ type:"scoreDelta", teamId, delta: Number(cl.value)||0 });
@@ -653,7 +723,6 @@ function pageRoom(code) {
     });
   }
 
-  // subscribe updates
   socket.off("room:snapshot");
   socket.on("room:snapshot", (snap) => {
     if (snap.code !== client.roomCode) return;
@@ -663,17 +732,36 @@ function pageRoom(code) {
   });
 }
 
+// ---------- Helpers ----------
+function makeBlankQuiz(cols, rows) {
+  const categories = Array.from({ length: cols }, (_, i) => `Kategorie ${i + 1}`);
+  const clues = Array.from({ length: cols }, (_, c) =>
+    Array.from({ length: rows }, (_, r) => ({
+      q: `Frage ${c + 1}.${r + 1}`,
+      a: `Antwort ${c + 1}.${r + 1}`,
+      value: (r + 1) * 100,
+      used: false
+    }))
+  );
+  return { version: 1, board: { cols, rows, categories, clues } };
+}
+
+function downloadJson(obj, filename) {
+  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
 // ---------- Router ----------
 function renderRoute() {
   const r = parseRoute();
   if (r.name === "home") return pageHome();
-  if (r.name === "join") return pageJoin();
   if (r.name === "room") return pageRoom(r.code);
   pageHome();
 }
 
 window.addEventListener("hashchange", renderRoute);
-
-// boot
 if (!location.hash) location.hash = "#/";
 renderRoute();
